@@ -1,18 +1,13 @@
-mod alerts;
-mod detection;
-mod generator;
-mod latency;
-mod tui;
-mod types;
-mod web;
-
 use std::time::{Duration, Instant};
 
 use clap::Parser;
 
-use crate::alerts::AlertEngine;
-use crate::generator::FraudGenerator;
-use crate::latency::LatencyTracker;
+use laminardb_fraud_detect::alerts::AlertEngine;
+use laminardb_fraud_detect::detection;
+use laminardb_fraud_detect::generator::FraudGenerator;
+use laminardb_fraud_detect::latency::LatencyTracker;
+use laminardb_fraud_detect::tui;
+use laminardb_fraud_detect::web;
 
 #[derive(Parser)]
 #[command(name = "laminardb-fraud-detect", about = "Real-time fraud detection with LaminarDB")]

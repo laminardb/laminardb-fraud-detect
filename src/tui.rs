@@ -246,7 +246,7 @@ fn draw_header(f: &mut ratatui::Frame, app: &App, area: Rect) {
 fn draw_alert_feed(f: &mut ratatui::Frame, app: &App, area: Rect) {
     let max_visible = (area.height as usize).saturating_sub(2);
     let total = app.alerts.len();
-    let start = if total > max_visible {
+    let _start = if total > max_visible {
         let max_scroll = total - max_visible;
         max_scroll.saturating_sub(app.scroll_offset)
     } else {
@@ -385,7 +385,7 @@ fn draw_counts_and_prices(f: &mut ratatui::Frame, app: &App, area: Rect) {
 
     // Symbol prices
     let mut symbols: Vec<_> = app.prices.iter().collect();
-    symbols.sort_by_key(|(s, _)| s.clone());
+    symbols.sort_by_key(|(s, _)| (*s).clone());
     let price_rows: Vec<Row> = symbols
         .iter()
         .map(|(sym, price)| {
