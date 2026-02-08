@@ -30,6 +30,7 @@ cargo bench                                         # Criterion benchmarks
 | `src/types.rs` | Record/FromRow structs matching SQL column order |
 | `src/latency.rs` | Microsecond tracking with percentile computation |
 | `src/stress.rs` | Stress test runner — 7 load levels, saturation detection |
+| `tests/correctness.rs` | 12 tests — 6 stream correctness + 6 edge cases |
 | `benches/throughput.rs` | Criterion benchmarks — push, end-to-end, setup |
 
 ## LaminarDB SQL Gotchas
@@ -53,6 +54,12 @@ These are critical — learned from laminardb-test:
 - EMIT ON WINDOW CLOSE — no effect in micro-batch model
 - CDC replication — connector stub, no actual I/O
 
+## Known Behavioral Findings
+
+- **Late data NOT dropped** — watermark does not filter late events; events behind watermark are processed into window aggregations ([#65](https://github.com/laminardb/laminardb/issues/65))
+- **SESSION emits per-tick** — `rapid_fire` produces ~1:1 output ratio, not one row per session close
+- **Engine ceiling ~2,275/sec** — 6-stream pipeline saturates at micro-batch tick rate, not SQL complexity
+
 ## Architecture
 
 Single LaminarDB instance with 100ms micro-batch ticks:
@@ -61,3 +68,4 @@ Single LaminarDB instance with 100ms micro-batch ticks:
 3. Six detection streams run in parallel (5 active + 1 ASOF pending crate fix)
 4. poll() retrieves results, AlertEngine scores each output
 5. LatencyTracker measures push/processing/alert latency
+6. Stress mode: 7 ramp levels with saturation detection (~2,275/sec ceiling)

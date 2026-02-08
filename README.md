@@ -120,7 +120,70 @@ The `--mode stress` option runs a structured ramp test across 7 load levels (100
 - Saturation point detection (where throughput drops below 90% of target)
 - Peak sustained throughput
 
-Criterion benchmarks (`cargo bench`) provide reproducible measurements for push throughput, end-to-end throughput, and pipeline setup time.
+### Baseline Results (MacOS, release mode, 6-stream pipeline)
+
+| Metric | Value |
+|--------|-------|
+| Peak sustained throughput | ~2,275 trades/sec |
+| Saturation point | Level 3 (~1,000 target/sec) |
+| Engine ceiling | ~2,275/sec (micro-batch tick-bound) |
+| Debug mode overhead | ~31% slower (~1,736/sec) |
+
+The engine ceiling is determined by LaminarDB's 100ms micro-batch tick rate, not SQL complexity. Reducing stream output (e.g., tighter JOIN windows) does not increase throughput — the tick loop is the bottleneck.
+
+### Criterion Benchmarks
+
+Criterion benchmarks (`cargo bench`) provide reproducible measurements:
+
+| Benchmark | What it measures |
+|-----------|-----------------|
+| `push_throughput` | Raw `push_batch()` ingestion (100–5,000 trades) |
+| `end_to_end` | Push + watermark + poll + alert evaluation |
+| `pipeline_setup` | Time to create full 6-stream pipeline |
+
+## Correctness Tests
+
+12 tests covering all detection streams plus edge cases:
+
+```bash
+cargo test -- --nocapture
+```
+
+| Test | What it verifies |
+|------|-----------------|
+| `test_vol_baseline` | HOP window aggregation (total_volume, trade_count, avg_price) |
+| `test_ohlc_vol` | TUMBLE OHLC values (open, high, low, close, price_range) |
+| `test_rapid_fire` | SESSION burst aggregation (burst_trades, burst_volume) |
+| `test_wash_score` | CASE WHEN buy/sell split (buy_volume, sell_volume, counts) |
+| `test_suspicious_match` | INNER JOIN + price_diff computation |
+| `test_asof_match` | Graceful skip if ASOF unavailable in crate v0.1.1 |
+| `test_edge_empty_window_gap` | Pipeline doesn't stall with empty TUMBLE windows |
+| `test_edge_late_data_not_dropped` | Documents: LaminarDB processes events behind watermark |
+| `test_edge_single_trade_ohlc` | Single trade: open=high=low=close, range=0 |
+| `test_edge_join_no_symbol_match` | INNER JOIN 0 rows when symbols differ |
+| `test_edge_join_outside_time_window` | INNER JOIN 0 rows when 100s apart |
+| `test_edge_wash_only_buys` | CASE WHEN: sell_volume=0, sell_count=0 |
+
+### Known Behavioral Findings
+
+| Finding | Details | Issue |
+|---------|---------|-------|
+| Late data NOT dropped | Events behind watermark are processed into window aggregations | [#65](https://github.com/laminardb/laminardb/issues/65) |
+| SESSION emits per-tick | `rapid_fire` produces ~1:1 output ratio (not one row per session close) | — |
+| ASOF JOIN 0 output | Stream creates OK but produces no rows in published crates v0.1.1 | [#57](https://github.com/laminardb/laminardb/issues/57) |
+| Engine ceiling | ~2,275/sec regardless of SQL complexity — micro-batch tick-bound | — |
+
+## CI Pipeline
+
+GitHub Actions runs on every push to `master`:
+
+1. **Build** — `cargo build --release`
+2. **Correctness tests** — 12 tests (6 stream + 6 edge case)
+3. **Headless integration** — 30s at 10% fraud rate, verifies 3+ alert types fire
+4. **Stress test** — 7 load levels (10s each), throughput + latency results
+5. **Criterion benchmarks** — push, end-to-end, and pipeline setup measurements
+
+All results are published to the GitHub Actions step summary.
 
 ## Project Structure
 
@@ -135,12 +198,15 @@ src/
   stress.rs        # Stress test runner (7 load levels + saturation detection)
   tui.rs           # Ratatui dashboard
   web.rs           # axum + WebSocket + Chart.js dashboard
+tests/
+  correctness.rs   # 12 correctness + edge case tests
 benches/
   throughput.rs    # Criterion benchmarks (push, end-to-end, setup)
 docs/
   CONTEXT.md       # Session context and architecture decisions
   STEERING.md      # Priorities and test matrix
   DETECTION.md     # Fraud detection strategies explained
+  ARCHITECTURE.md  # System diagrams and data flow
 ```
 
 ## License

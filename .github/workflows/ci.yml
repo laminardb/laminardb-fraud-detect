@@ -57,11 +57,35 @@ jobs:
             exit 1
           fi
 
+      - name: Stress test (quick, 10s per level)
+        run: |
+          cargo run --release -- --mode stress --level-duration 10 2>&1 | tee stress_output.txt
+
+      - name: Stress test summary
+        run: |
+          echo "## Stress Test Results" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat stress_output.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Criterion benchmarks
+        run: |
+          cargo bench 2>&1 | tee bench_output.txt
+
+      - name: Benchmark summary
+        run: |
+          echo "## Criterion Benchmarks" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat bench_output.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
       - name: Test summary
         if: always()
         run: |
           echo "## Test Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- Build: passed" >> $GITHUB_STEP_SUMMARY
-          echo "- Correctness tests: 5 streams verified" >> $GITHUB_STEP_SUMMARY
+          echo "- Correctness tests: 6 streams + 6 edge cases verified" >> $GITHUB_STEP_SUMMARY
           echo "- Headless integration: 30s at 10% fraud rate" >> $GITHUB_STEP_SUMMARY
+          echo "- Stress test: 7 load levels (10s each)" >> $GITHUB_STEP_SUMMARY
+          echo "- Criterion benchmarks: push, end-to-end, pipeline setup" >> $GITHUB_STEP_SUMMARY

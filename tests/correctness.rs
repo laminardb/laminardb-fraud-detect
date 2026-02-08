@@ -1,4 +1,4 @@
-//! Correctness tests for all 5 detection streams.
+//! Correctness tests for all 6 detection streams + edge cases.
 //!
 //! Pushes known deterministic data, advances watermarks, and asserts
 //! exact output values from each stream.
@@ -315,6 +315,240 @@ async fn test_asof_match_correctness() {
     assert_eq!(row.trade_account, "D1", "trade_account should be D1");
     assert_eq!(row.order_account, "D2", "order_account should be D2");
     assert_eq!(row.order_id, "ASOF-ORD-1", "order_id should be ASOF-ORD-1");
+
+    let _ = pipeline.db.shutdown().await;
+}
+
+// ══════════════════════════════════════════════════════════
+// Edge case tests: empty windows, late data, NULL handling
+// ══════════════════════════════════════════════════════════
+
+// ── Edge 1: Empty window gap ──
+// Push trades in window [100_000, 105_000), skip window [105_000, 110_000),
+// push trades in [110_000, 115_000). Verify both populated windows produce
+// output and the gap doesn't break the pipeline.
+#[tokio::test]
+async fn test_edge_empty_window_gap() {
+    let pipeline = detection::setup().await.unwrap();
+
+    // Window 1: trades at 100_000
+    let trades_w1 = vec![
+        Trade { account_id: "E1".into(), symbol: "AAPL".into(), side: "buy".into(), price: 150.0, volume: 100, order_ref: "".into(), ts: 100_000 },
+    ];
+    pipeline.trade_source.push_batch(trades_w1);
+    pipeline.trade_source.watermark(110_000); // past empty window
+    pipeline.order_source.watermark(110_000);
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Window 3: trades at 110_000
+    let trades_w3 = vec![
+        Trade { account_id: "E2".into(), symbol: "AAPL".into(), side: "sell".into(), price: 155.0, volume: 200, order_ref: "".into(), ts: 110_000 },
+    ];
+    pipeline.trade_source.push_batch(trades_w3);
+    pipeline.trade_source.watermark(130_000);
+    pipeline.order_source.watermark(130_000);
+
+    let sub = pipeline.ohlc_vol_sub.as_ref().expect("ohlc_vol should exist");
+    let results = collect_all(sub, Duration::from_secs(5)).await;
+
+    // Should get OHLC rows from both populated windows, pipeline didn't stall
+    let aapl: Vec<_> = results.iter()
+        .filter(|r: &&OhlcVolatility| r.symbol == "AAPL")
+        .collect();
+    assert!(aapl.len() >= 2, "Expected OHLC output from both windows after gap, got {} rows", aapl.len());
+
+    let _ = pipeline.db.shutdown().await;
+}
+
+// ── Edge 2: Late data (behind watermark) ──
+// Push trades, advance watermark far ahead, then push more trades with
+// old timestamps. FINDING: LaminarDB v0.1.1 does NOT drop late data —
+// events behind the watermark are still processed and appear in output.
+// This test documents that behavior.
+#[tokio::test]
+async fn test_edge_late_data_not_dropped() {
+    let pipeline = detection::setup().await.unwrap();
+
+    // Push trade at 100_000, advance watermark to 200_000
+    let on_time = vec![
+        Trade { account_id: "L1".into(), symbol: "MSFT".into(), side: "buy".into(), price: 400.0, volume: 100, order_ref: "".into(), ts: 100_000 },
+    ];
+    pipeline.trade_source.push_batch(on_time);
+    pipeline.trade_source.watermark(200_000);
+    pipeline.order_source.watermark(200_000);
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Drain output from the on-time trade
+    let sub = pipeline.vol_baseline_sub.as_ref().expect("vol_baseline should exist");
+    let _initial = collect_all(sub, Duration::from_secs(2)).await;
+
+    // Push LATE trade (ts=50_000 is way behind watermark 200_000)
+    let late = vec![
+        Trade { account_id: "L2".into(), symbol: "MSFT".into(), side: "sell".into(), price: 999.0, volume: 9999, order_ref: "".into(), ts: 50_000 },
+    ];
+    pipeline.trade_source.push_batch(late);
+    pipeline.trade_source.watermark(250_000);
+    pipeline.order_source.watermark(250_000);
+
+    let after = collect_all(sub, Duration::from_secs(3)).await;
+
+    // LaminarDB v0.1.1 behavior: late data IS processed (not dropped)
+    let has_late_volume = after.iter()
+        .any(|r: &VolumeBaseline| r.symbol == "MSFT" && r.total_volume >= 9999);
+    assert!(has_late_volume,
+        "LaminarDB v0.1.1 processes late data — volume=9999 should appear in output. \
+         Rows after: {:?}",
+        after.iter().filter(|r| r.symbol == "MSFT").map(|r| r.total_volume).collect::<Vec<_>>());
+
+    // Pipeline is still functional after late data
+    let recovery = vec![
+        Trade { account_id: "L3".into(), symbol: "MSFT".into(), side: "buy".into(), price: 405.0, volume: 50, order_ref: "".into(), ts: 250_000 },
+    ];
+    pipeline.trade_source.push_batch(recovery);
+    pipeline.trade_source.watermark(300_000);
+    pipeline.order_source.watermark(300_000);
+
+    let recovery_results = collect_all(sub, Duration::from_secs(3)).await;
+    let recovery_msft: Vec<_> = recovery_results.iter()
+        .filter(|r: &&VolumeBaseline| r.symbol == "MSFT")
+        .collect();
+    assert!(!recovery_msft.is_empty(),
+        "Pipeline should still produce output after late data injection");
+
+    let _ = pipeline.db.shutdown().await;
+}
+
+// ── Edge 3: Single-trade OHLC window ──
+// Push exactly 1 trade into a TUMBLE window. OHLC should have
+// open = high = low = close = price, price_range = 0.
+#[tokio::test]
+async fn test_edge_single_trade_ohlc() {
+    let pipeline = detection::setup().await.unwrap();
+
+    let trades = vec![
+        Trade { account_id: "S1".into(), symbol: "TSLA".into(), side: "buy".into(), price: 250.50, volume: 42, order_ref: "".into(), ts: 100_000 },
+    ];
+
+    pipeline.trade_source.push_batch(trades);
+    pipeline.trade_source.watermark(120_000);
+    pipeline.order_source.watermark(120_000);
+
+    let sub = pipeline.ohlc_vol_sub.as_ref().expect("ohlc_vol should exist");
+    let results = collect_all(sub, Duration::from_secs(5)).await;
+
+    let tsla: Vec<_> = results.iter()
+        .filter(|r: &&OhlcVolatility| r.symbol == "TSLA" && r.volume == 42)
+        .collect();
+    assert!(!tsla.is_empty(), "Expected OHLC output for single TSLA trade");
+
+    let row = &tsla[0];
+    assert!((row.open - 250.50).abs() < 0.01, "open should equal price for single trade");
+    assert!((row.high - 250.50).abs() < 0.01, "high should equal price for single trade");
+    assert!((row.low - 250.50).abs() < 0.01, "low should equal price for single trade");
+    assert!((row.close - 250.50).abs() < 0.01, "close should equal price for single trade");
+    assert!((row.price_range).abs() < 0.01, "price_range should be 0 for single trade, got {}", row.price_range);
+
+    let _ = pipeline.db.shutdown().await;
+}
+
+// ── Edge 4: INNER JOIN with no matching symbol ──
+// Push trades for AAPL, orders for GOOGL. INNER JOIN requires symbol match,
+// so output should be empty.
+#[tokio::test]
+async fn test_edge_join_no_symbol_match() {
+    let pipeline = detection::setup().await.unwrap();
+    let base: i64 = 100_000;
+
+    let trades = vec![
+        Trade { account_id: "J1".into(), symbol: "AAPL".into(), side: "buy".into(), price: 150.0, volume: 100, order_ref: "".into(), ts: base },
+    ];
+    let orders = vec![
+        Order { order_id: "ORD-NM".into(), account_id: "J2".into(), symbol: "GOOGL".into(), side: "sell".into(), quantity: 100, price: 2800.0, ts: base },
+    ];
+
+    pipeline.trade_source.push_batch(trades);
+    pipeline.order_source.push_batch(orders);
+    pipeline.trade_source.watermark(base + 20_000);
+    pipeline.order_source.watermark(base + 20_000);
+
+    let sub = pipeline.suspicious_match_sub.as_ref().expect("suspicious_match should exist");
+    let results = collect_all(sub, Duration::from_secs(3)).await;
+
+    // Filter for our specific test symbols — should be empty
+    let mismatched: Vec<_> = results.iter()
+        .filter(|r: &&SuspiciousMatch| r.symbol == "AAPL" && r.order_id == "ORD-NM")
+        .collect();
+    assert!(mismatched.is_empty(),
+        "INNER JOIN should produce no output when symbols don't match, got {} rows", mismatched.len());
+
+    let _ = pipeline.db.shutdown().await;
+}
+
+// ── Edge 5: INNER JOIN with order outside time window ──
+// Push trade at ts=100_000 and order at ts=200_000 (100s apart, far outside 2s window).
+// Should produce no match.
+#[tokio::test]
+async fn test_edge_join_outside_time_window() {
+    let pipeline = detection::setup().await.unwrap();
+
+    let trades = vec![
+        Trade { account_id: "T1".into(), symbol: "AMZN".into(), side: "buy".into(), price: 185.0, volume: 75, order_ref: "".into(), ts: 100_000 },
+    ];
+    let orders = vec![
+        Order { order_id: "ORD-FAR".into(), account_id: "T2".into(), symbol: "AMZN".into(), side: "sell".into(), quantity: 75, price: 186.0, ts: 200_000 },
+    ];
+
+    pipeline.trade_source.push_batch(trades);
+    pipeline.order_source.push_batch(orders);
+    pipeline.trade_source.watermark(250_000);
+    pipeline.order_source.watermark(250_000);
+
+    let sub = pipeline.suspicious_match_sub.as_ref().expect("suspicious_match should exist");
+    let results = collect_all(sub, Duration::from_secs(3)).await;
+
+    let far_match: Vec<_> = results.iter()
+        .filter(|r: &&SuspiciousMatch| r.order_id == "ORD-FAR")
+        .collect();
+    assert!(far_match.is_empty(),
+        "INNER JOIN should produce no output when order is 100s away (outside 2s window), got {} rows",
+        far_match.len());
+
+    let _ = pipeline.db.shutdown().await;
+}
+
+// ── Edge 6: Wash score with only buys (no sells) ──
+// Push only buy-side trades for one account+symbol. sell_volume and
+// sell_count should be 0.
+#[tokio::test]
+async fn test_edge_wash_only_buys() {
+    let pipeline = detection::setup().await.unwrap();
+
+    let trades = vec![
+        Trade { account_id: "BUY-ONLY".into(), symbol: "GOOGL".into(), side: "buy".into(), price: 2800.0, volume: 100, order_ref: "".into(), ts: 100_000 },
+        Trade { account_id: "BUY-ONLY".into(), symbol: "GOOGL".into(), side: "buy".into(), price: 2810.0, volume: 200, order_ref: "".into(), ts: 101_000 },
+        Trade { account_id: "BUY-ONLY".into(), symbol: "GOOGL".into(), side: "buy".into(), price: 2820.0, volume: 150, order_ref: "".into(), ts: 102_000 },
+    ];
+
+    pipeline.trade_source.push_batch(trades);
+    pipeline.trade_source.watermark(120_000);
+    pipeline.order_source.watermark(120_000);
+
+    let sub = pipeline.wash_score_sub.as_ref().expect("wash_score should exist");
+    let results = collect_all(sub, Duration::from_secs(5)).await;
+
+    let buy_only: Vec<_> = results.iter()
+        .filter(|r: &&WashScore| r.account_id == "BUY-ONLY" && r.symbol == "GOOGL")
+        .collect();
+    assert!(!buy_only.is_empty(), "Expected wash_score output for BUY-ONLY account");
+
+    for row in &buy_only {
+        assert_eq!(row.sell_volume, 0, "sell_volume should be 0 when only buys, got {}", row.sell_volume);
+        assert_eq!(row.sell_count, 0, "sell_count should be 0 when only buys, got {}", row.sell_count);
+        assert!(row.buy_volume > 0, "buy_volume should be > 0");
+        assert!(row.buy_count > 0, "buy_count should be > 0");
+    }
 
     let _ = pipeline.db.shutdown().await;
 }
