@@ -46,7 +46,7 @@ jobs:
         run: |
           echo "## Fraud Detection Results" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          cat output.txt >> $GITHUB_STEP_SUMMARY
+          tail -30 output.txt >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
           # Check that at least 3 alert types fired
@@ -65,7 +65,7 @@ jobs:
         run: |
           echo "## Stress Test Results" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          cat stress_output.txt >> $GITHUB_STEP_SUMMARY
+          tail -30 stress_output.txt >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: Criterion benchmarks
@@ -76,7 +76,7 @@ jobs:
         run: |
           echo "## Criterion Benchmarks" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          cat bench_output.txt >> $GITHUB_STEP_SUMMARY
+          grep -E '(^Benchmarking|^push_throughput|^end_to_end|^pipeline_setup|time:)' bench_output.txt >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "(no output)" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: Test summary
