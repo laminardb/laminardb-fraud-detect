@@ -1,6 +1,6 @@
 # laminardb-fraud-detect
 
-Real-time fraud detection system using [LaminarDB](https://laminardb.io) embedded streaming engine. Ingests synthetic market data, runs 5 concurrent detection streams with microsecond latency, and generates alerts for anomalous trading patterns.
+Real-time fraud detection system using [LaminarDB](https://laminardb.io) embedded streaming engine. Ingests synthetic market data, runs 6 concurrent detection streams with microsecond latency, and generates alerts for anomalous trading patterns.
 
 ## Detection Results
 
@@ -11,6 +11,7 @@ Real-time fraud detection system using [LaminarDB](https://laminardb.io) embedde
 | Rapid-Fire Burst | SESSION (2s gap) | RapidFire | **PASS** |
 | Wash Trading Score | TUMBLE (5s) + CASE WHEN | WashTrading | **PASS** |
 | Cross-Stream Match | INNER JOIN (10s window) | SuspiciousMatch | **PASS** |
+| Front-Running | ASOF JOIN | FrontRunning | **PENDING** (awaiting crate v0.1.2, see [#57](https://github.com/laminardb/laminardb/issues/57)) |
 
 ## Latency (typical headless run, 15s @ 10% fraud rate)
 
@@ -52,8 +53,10 @@ cargo run -- --mode web --port 3000
 │                   └── TUMBLE(5s)  ──► wash_score             │
 │                                                             │
 │  SOURCE: orders ──┐                                         │
-│                   └── INNER JOIN(trades×orders) ──►          │
-│                       suspicious_match                       │
+│                   ├── INNER JOIN(trades×orders) ──►          │
+│                   │   suspicious_match                       │
+│                   └── ASOF JOIN(trades×orders) ──►           │
+│                       asof_match (pending crate fix)         │
 └─────────────────────────────────────────────────────────────┘
       │
       ▼
@@ -76,6 +79,7 @@ cargo run -- --mode web --port 3000
 | Rapid-Fire | 20-30 trades in <2s from fraud account | rapid_fire (SESSION) | burst_trades >= 5 |
 | Wash Trading | Equal buy/sell pairs from same account | wash_score (TUMBLE) | imbalance < 0.3 with both sides >= 2 |
 | Suspicious Match | Tight price matching on trade-order pairs | suspicious_match (JOIN) | \|price_diff\| < 1.0 |
+| Front-Running | Trade follows order at similar price from different account | asof_match (ASOF JOIN) | \|price_spread\| < 0.5 |
 
 ## LaminarDB Features Used
 
@@ -86,6 +90,7 @@ All features are confirmed working from [laminardb-test](https://github.com/lami
 - **Phase 4 (INNER JOIN)**: Stream-stream join with numeric `BETWEEN` time bounds
 - **Phase 6 (HOP window)**: `HOP(ts, slide, size)` — rolling/sliding windows
 - **Phase 6 (SESSION window)**: `SESSION(ts, gap)` — gap-based burst detection
+- **ASOF JOIN** *(pending)*: `ASOF JOIN ... MATCH_CONDITION()` — temporal nearest-match (SQL parses, execution awaiting crate v0.1.2)
 
 ## Dependencies
 
@@ -102,10 +107,10 @@ laminar-core = "0.1"     # Core engine (required by derive macro)
 ```
 src/
   main.rs          # Entry point + headless mode
-  types.rs         # Record/FromRow structs (2 inputs, 5 outputs)
+  types.rs         # Record/FromRow structs (2 inputs, 6 outputs)
   generator.rs     # FraudGenerator with 4 fraud scenarios
-  detection.rs     # LaminarDB pipeline (5 detection streams)
-  alerts.rs        # AlertEngine with threshold scoring
+  detection.rs     # LaminarDB pipeline (6 detection streams)
+  alerts.rs        # AlertEngine with threshold scoring (6 alert types)
   latency.rs       # Microsecond latency tracking (p50/p95/p99)
   tui.rs           # Ratatui dashboard
   web.rs           # axum + WebSocket + Chart.js dashboard

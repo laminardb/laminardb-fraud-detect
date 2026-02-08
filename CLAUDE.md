@@ -21,7 +21,7 @@ cargo run -- --mode headless --fraud-rate 0.2       # Higher fraud rate
 
 | File | Purpose |
 |------|---------|
-| `src/detection.rs` | LaminarDB pipeline — 2 sources, 5 detection streams |
+| `src/detection.rs` | LaminarDB pipeline — 2 sources, 6 detection streams |
 | `src/generator.rs` | FraudGenerator — mock data + 4 fraud injection scenarios |
 | `src/alerts.rs` | AlertEngine — threshold scoring, severity classification |
 | `src/types.rs` | Record/FromRow structs matching SQL column order |
@@ -41,9 +41,9 @@ These are critical — learned from laminardb-test:
 - FromRow field order must match SQL SELECT column order exactly
 - `CREATE SINK` before `db.start()`, then `db.subscribe()` after start
 
-## What Does NOT Work
+## What Does NOT Work (in published crates v0.1.1)
 
-- ASOF JOIN — DataFusion limitation in embedded mode
+- ASOF JOIN — SQL parses with `MATCH_CONDITION()` syntax, stream creates, but produces no output rows. Works with local path deps (see [#57](https://github.com/laminardb/laminardb/issues/57)). Code is wired up and will activate automatically once crate is updated.
 - INTERVAL arithmetic on BIGINT — use numeric constants
 - EMIT ON WINDOW CLOSE — no effect in micro-batch model
 - CDC replication — connector stub, no actual I/O
@@ -53,6 +53,6 @@ These are critical — learned from laminardb-test:
 Single LaminarDB instance with 100ms micro-batch ticks:
 1. FraudGenerator produces trades + orders each cycle
 2. push_batch() + watermark() feeds both sources
-3. Five detection streams run in parallel via DataFusion ctx.sql()
+3. Six detection streams run in parallel (5 active + 1 ASOF pending crate fix)
 4. poll() retrieves results, AlertEngine scores each output
 5. LatencyTracker measures push/processing/alert latency

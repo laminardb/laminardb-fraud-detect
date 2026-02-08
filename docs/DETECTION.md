@@ -208,6 +208,51 @@ Normal order generation already creates ~30% matching orders with slight price o
 
 ---
 
+## 6. Front-Running Detection
+
+**Stream:** `asof_match` | **Join:** ASOF JOIN | **Alert:** FrontRunning | **Status:** Pending crate v0.1.2
+
+### What It Detects
+
+A trade from account A that executes shortly after an order from account B at a very similar price. This pattern suggests account A may have had advance knowledge of account B's order — the classic front-running scenario.
+
+### SQL
+
+```sql
+CREATE STREAM asof_match AS
+SELECT t.symbol,
+       t.price AS trade_price,
+       t.volume,
+       t.account_id AS trade_account,
+       o.order_id,
+       o.account_id AS order_account,
+       o.price AS order_price,
+       t.price - o.price AS price_spread
+FROM trades t
+ASOF JOIN orders o
+MATCH_CONDITION(t.ts >= o.ts)
+ON t.symbol = o.symbol
+```
+
+The ASOF JOIN matches each trade with the **most recent prior order** on the same symbol. Unlike INNER JOIN (which produces all matching pairs within a time window), ASOF JOIN produces exactly one match per left row — the temporally closest right row.
+
+### Alert Logic
+
+```
+if trade_account != order_account AND |price_spread| < 0.5:  alert
+  < 0.01 → Critical  (near-exact price execution)
+  < 0.1  → High
+  < 0.5  → Medium
+```
+
+The different-account check is critical — same-account matches are normal self-execution.
+
+### Current Status
+
+The ASOF JOIN SQL parses correctly with the `MATCH_CONDITION()` syntax and the stream creates successfully, but the published crates (v0.1.1) do not produce output rows. The same SQL works end-to-end with local path dependencies. See [laminardb#57](https://github.com/laminardb/laminardb/issues/57). The code is fully wired up and will activate automatically once the crate is updated.
+
+---
+
 ## Tuning Guide
 
 All thresholds are configurable via the `AlertEngine` struct fields:
@@ -219,6 +264,7 @@ All thresholds are configurable via the `AlertEngine` struct fields:
 | `rapid_fire_threshold` | 5 | Min burst trades to trigger |
 | `wash_imbalance_threshold` | 0.3 | Max imbalance (0=perfect wash) |
 | `match_price_diff_threshold` | 1.0 | Max |price_diff| for suspicious |
+| `front_run_spread_threshold` | 0.5 | Max |price_spread| for front-running |
 
 For production use:
 - Increase `volume_ratio_threshold` to 5-10x (reduce noise)
