@@ -119,7 +119,7 @@ pub async fn setup() -> Result<DetectionPipeline, Box<dyn std::error::Error>> {
          FROM trades t
          INNER JOIN orders o
          ON t.symbol = o.symbol
-         AND o.ts BETWEEN t.ts - 10000 AND t.ts + 10000"
+         AND o.ts BETWEEN t.ts - 2000 AND t.ts + 2000"
     ).await;
     streams_created.push(("suspicious_match".into(), match_ok));
 

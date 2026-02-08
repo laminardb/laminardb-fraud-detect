@@ -38,6 +38,13 @@ impl LatencyTracker {
         }
     }
 
+    pub fn reset(&mut self) {
+        self.push_latencies.clear();
+        self.processing_latencies.clear();
+        self.alert_latencies.clear();
+        self.last_push_instant = None;
+    }
+
     pub fn record_push_start(&self) -> Instant {
         Instant::now()
     }

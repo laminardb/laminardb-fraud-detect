@@ -210,7 +210,7 @@ async fn test_wash_score_correctness() {
 
 // ── Test 5: Suspicious Match (INNER JOIN) ──
 // SQL: t.price - o.price AS price_diff
-//      FROM trades t INNER JOIN orders o ON symbol AND ts BETWEEN -10000 AND +10000
+//      FROM trades t INNER JOIN orders o ON symbol AND ts BETWEEN -2000 AND +2000
 // Push 1 trade + 1 order at same timestamp/symbol, assert join and price_diff.
 #[tokio::test]
 async fn test_suspicious_match_correctness() {
@@ -222,7 +222,7 @@ async fn test_suspicious_match_correctness() {
         Trade { account_id: "C1".into(), symbol: "AMZN".into(), side: "buy".into(), price: 180.50, volume: 50, order_ref: "ORD-1".into(), ts: base },
     ];
 
-    // Order: AMZN at 180.55 (same timestamp — within 10s window)
+    // Order: AMZN at 180.55 (same timestamp — within 2s window)
     let orders = vec![
         Order { order_id: "ORD-1".into(), account_id: "C2".into(), symbol: "AMZN".into(), side: "sell".into(), quantity: 50, price: 180.55, ts: base },
     ];

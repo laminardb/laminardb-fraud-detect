@@ -10,7 +10,7 @@ Real-time fraud detection system using [LaminarDB](https://laminardb.io) embedde
 | OHLC + Volatility | TUMBLE (5s) | PriceSpike | **PASS** |
 | Rapid-Fire Burst | SESSION (2s gap) | RapidFire | **PASS** |
 | Wash Trading Score | TUMBLE (5s) + CASE WHEN | WashTrading | **PASS** |
-| Cross-Stream Match | INNER JOIN (10s window) | SuspiciousMatch | **PASS** |
+| Cross-Stream Match | INNER JOIN (2s window) | SuspiciousMatch | **PASS** |
 | Front-Running | ASOF JOIN | FrontRunning | **PENDING** (awaiting crate v0.1.2, see [#57](https://github.com/laminardb/laminardb/issues/57)) |
 
 ## Latency (typical headless run, 15s @ 10% fraud rate)
@@ -32,6 +32,15 @@ cargo run
 
 # Web dashboard
 cargo run -- --mode web --port 3000
+
+# Stress test (7 load levels, 60s each)
+cargo run --release -- --mode stress
+
+# Quick stress test (10s per level)
+cargo run --release -- --mode stress --level-duration 10
+
+# Criterion benchmarks
+cargo bench
 ```
 
 ## How It Works
@@ -102,6 +111,17 @@ laminar-derive = "0.1"   # Record/FromRow derive macros
 laminar-core = "0.1"     # Core engine (required by derive macro)
 ```
 
+## Stress Testing & Benchmarks
+
+The `--mode stress` option runs a structured ramp test across 7 load levels (100 to 200K trades/sec target), measuring throughput and latency degradation at each level. It reports:
+
+- Actual vs target throughput per level
+- Push and processing latency percentiles (p50/p95/p99)
+- Saturation point detection (where throughput drops below 90% of target)
+- Peak sustained throughput
+
+Criterion benchmarks (`cargo bench`) provide reproducible measurements for push throughput, end-to-end throughput, and pipeline setup time.
+
 ## Project Structure
 
 ```
@@ -112,8 +132,11 @@ src/
   detection.rs     # LaminarDB pipeline (6 detection streams)
   alerts.rs        # AlertEngine with threshold scoring (6 alert types)
   latency.rs       # Microsecond latency tracking (p50/p95/p99)
+  stress.rs        # Stress test runner (7 load levels + saturation detection)
   tui.rs           # Ratatui dashboard
   web.rs           # axum + WebSocket + Chart.js dashboard
+benches/
+  throughput.rs    # Criterion benchmarks (push, end-to-end, setup)
 docs/
   CONTEXT.md       # Session context and architecture decisions
   STEERING.md      # Priorities and test matrix

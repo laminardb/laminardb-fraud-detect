@@ -15,6 +15,9 @@ cargo run                                           # TUI dashboard
 cargo run -- --mode headless --duration 15          # CI mode
 cargo run -- --mode web --port 3000                 # Web dashboard
 cargo run -- --mode headless --fraud-rate 0.2       # Higher fraud rate
+cargo run --release -- --mode stress                # Stress test (7 levels, 60s each)
+cargo run --release -- --mode stress --level-duration 10  # Quick stress test
+cargo bench                                         # Criterion benchmarks
 ```
 
 ## Key Files
@@ -26,6 +29,8 @@ cargo run -- --mode headless --fraud-rate 0.2       # Higher fraud rate
 | `src/alerts.rs` | AlertEngine — threshold scoring, severity classification |
 | `src/types.rs` | Record/FromRow structs matching SQL column order |
 | `src/latency.rs` | Microsecond tracking with percentile computation |
+| `src/stress.rs` | Stress test runner — 7 load levels, saturation detection |
+| `benches/throughput.rs` | Criterion benchmarks — push, end-to-end, setup |
 
 ## LaminarDB SQL Gotchas
 

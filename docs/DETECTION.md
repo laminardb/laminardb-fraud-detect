@@ -168,7 +168,7 @@ An imbalance near 0.0 means the account bought and sold almost identical amounts
 
 ## 5. Suspicious Trade-Order Matching
 
-**Stream:** `suspicious_match` | **Join:** INNER JOIN (10s window) | **Alert:** SuspiciousMatch
+**Stream:** `suspicious_match` | **Join:** INNER JOIN (2s window) | **Alert:** SuspiciousMatch
 
 ### What It Detects
 
@@ -189,10 +189,10 @@ SELECT t.symbol,
 FROM trades t
 INNER JOIN orders o
 ON t.symbol = o.symbol
-AND o.ts BETWEEN t.ts - 10000 AND t.ts + 10000
+AND o.ts BETWEEN t.ts - 2000 AND t.ts + 2000
 ```
 
-Uses numeric `BETWEEN` (not INTERVAL) because `ts` is BIGINT milliseconds. The 10-second window is tighter than typical market matching to reduce false positives.
+Uses numeric `BETWEEN` (not INTERVAL) because `ts` is BIGINT milliseconds. The 2-second window keeps join fan-out low while still catching suspicious matches.
 
 ### Alert Logic
 

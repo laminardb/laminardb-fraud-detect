@@ -58,6 +58,12 @@ impl FraudGenerator {
         chrono::Utc::now().timestamp_millis()
     }
 
+    /// Returns the event-time span (ms) of a stress cycle with `count` trades.
+    /// Used by stress.rs to advance event_ts between cycles without overlap.
+    pub fn stress_cycle_span_ms(count: usize) -> i64 {
+        count as i64 * 50 // 50ms step per trade
+    }
+
     pub fn current_prices(&self) -> &HashMap<String, f64> {
         &self.prices
     }
@@ -142,6 +148,71 @@ impl FraudGenerator {
                     quantity: volume,
                     price: *price + offset,
                     ts,
+                });
+            }
+        }
+
+        (trades, orders)
+    }
+
+    /// Generate a stress-test cycle with a configurable number of trades.
+    /// No fraud injection — measures pure pipeline throughput.
+    ///
+    /// Uses a constant 50ms step between consecutive trades so that the JOIN
+    /// fan-out ratio stays the same regardless of batch size. The caller must
+    /// provide a `base_ts` that advances between cycles (see stress.rs) to
+    /// prevent event-time overlap between batches.
+    pub fn generate_stress_cycle(&mut self, base_ts: i64, count: usize) -> (Vec<Trade>, Vec<Order>) {
+        let mut rng = rand::thread_rng();
+        let mut trades = Vec::with_capacity(count);
+        let mut orders = Vec::new();
+
+        // Constant step: 50ms between consecutive trades.
+        // With 5 symbols round-robin, same-symbol gap = 250ms.
+        // In ±2s JOIN window: ~16 same-symbol positions, ~4.8 order matches per trade.
+        // This ratio stays constant regardless of batch size.
+        let step_ms: i64 = 50;
+
+        for i in 0..count {
+            let trade_ts = base_ts + (i as i64 * step_ms);
+
+            let (sym, _) = SYMBOLS[i % SYMBOLS.len()];
+            let symbol = sym.to_string();
+            let price = self.prices.get_mut(&symbol).unwrap();
+
+            // Small random walk
+            let change = *price * rng.gen_range(-0.005..0.005);
+            *price += change;
+
+            let account = NORMAL_ACCOUNTS[rng.gen_range(0..NORMAL_ACCOUNTS.len())];
+            let side = if rng.gen_bool(0.5) { "buy" } else { "sell" };
+            let volume = rng.gen_range(10..500);
+
+            self.trade_seq += 1;
+            let order_ref = format!("T-{:06}", self.trade_seq);
+
+            trades.push(Trade {
+                account_id: account.to_string(),
+                symbol: symbol.clone(),
+                side: side.to_string(),
+                price: *price,
+                volume,
+                order_ref,
+                ts: trade_ts,
+            });
+
+            // ~30% chance to generate a matching order
+            if rng.gen_bool(0.3) {
+                self.order_seq += 1;
+                let offset = *price * rng.gen_range(-0.002..0.002);
+                orders.push(Order {
+                    order_id: format!("ORD-{:06}", self.order_seq),
+                    account_id: account.to_string(),
+                    symbol,
+                    side: side.to_string(),
+                    quantity: volume,
+                    price: *price + offset,
+                    ts: trade_ts,
                 });
             }
         }

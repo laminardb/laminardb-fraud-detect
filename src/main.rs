@@ -6,6 +6,7 @@ use laminardb_fraud_detect::alerts::AlertEngine;
 use laminardb_fraud_detect::detection;
 use laminardb_fraud_detect::generator::FraudGenerator;
 use laminardb_fraud_detect::latency::LatencyTracker;
+use laminardb_fraud_detect::stress;
 use laminardb_fraud_detect::tui;
 use laminardb_fraud_detect::web;
 
@@ -27,6 +28,10 @@ struct Cli {
     /// Run duration in seconds (0 = infinite)
     #[arg(long, default_value = "0")]
     duration: u64,
+
+    /// Duration per stress test level in seconds (stress mode only)
+    #[arg(long, default_value = "60")]
+    level_duration: u64,
 }
 
 #[tokio::main]
@@ -37,7 +42,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "tui" => tui::run(cli.fraud_rate, cli.duration).await?,
         "web" => web::run(cli.port, cli.fraud_rate, cli.duration).await?,
         "headless" => run_headless(cli.fraud_rate, cli.duration).await?,
-        other => eprintln!("Unknown mode: {other}. Use --mode tui|web|headless"),
+        "stress" => stress::run(cli.level_duration).await?,
+        other => eprintln!("Unknown mode: {other}. Use --mode tui|web|headless|stress"),
     }
 
     Ok(())
