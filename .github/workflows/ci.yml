@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Run headless (30s, 10% fraud rate)
+        run: |
+          cargo run --release -- --mode headless --fraud-rate 0.10 --duration 30 2>&1 | tee output.txt
+
+      - name: Verify alerts generated
+        run: |
+          echo "## Fraud Detection Results" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat output.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+          # Check that at least 3 alert types fired
+          TYPES=$(grep -cE "^  (VolumeAnomaly|PriceSpike|RapidFire|WashTrading|SuspiciousMatch):" output.txt || true)
+          echo "Alert types with counts: $TYPES"
+          if [ "$TYPES" -lt 3 ]; then
+            echo "::error::Expected at least 3 alert types, got $TYPES"
+            exit 1
+          fi
