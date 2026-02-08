@@ -98,7 +98,7 @@ async fn run_engine(
     let mut latency = LatencyTracker::new();
     let mut total_trades = 0u64;
     let mut total_orders = 0u64;
-    let mut stream_counts: [u64; 5] = [0; 5];
+    let mut stream_counts: [u64; 6] = [0; 6];
     let mut prices: HashMap<String, f64> = HashMap::new();
     let mut recent_alerts: Vec<Alert> = Vec::new();
 
@@ -193,9 +193,21 @@ async fn run_engine(
                 }
             }
         }
+        if let Some(ref sub) = pipeline.asof_match_sub {
+            while let Some(rows) = sub.poll() {
+                latency.record_poll();
+                for row in &rows {
+                    stream_counts[5] += 1;
+                    if let Some(alert) = alert_engine.evaluate_asof(row, gen_instant) {
+                        latency.record_alert(gen_instant);
+                        recent_alerts.push(alert);
+                    }
+                }
+            }
+        }
 
         // Broadcast update to WebSocket clients
-        let names = ["vol_baseline", "ohlc_vol", "rapid_fire", "wash_score", "suspicious_match"];
+        let names = ["vol_baseline", "ohlc_vol", "rapid_fire", "wash_score", "suspicious_match", "asof_match"];
         let streams: Vec<StreamStatus> = names
             .iter()
             .enumerate()

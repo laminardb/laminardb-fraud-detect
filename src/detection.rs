@@ -11,6 +11,7 @@ pub struct DetectionPipeline {
     pub rapid_fire_sub: Option<laminar_db::TypedSubscription<RapidFireBurst>>,
     pub wash_score_sub: Option<laminar_db::TypedSubscription<WashScore>>,
     pub suspicious_match_sub: Option<laminar_db::TypedSubscription<SuspiciousMatch>>,
+    pub asof_match_sub: Option<laminar_db::TypedSubscription<AsofMatch>>,
     pub streams_created: Vec<(String, bool)>,
 }
 
@@ -122,6 +123,24 @@ pub async fn setup() -> Result<DetectionPipeline, Box<dyn std::error::Error>> {
     ).await;
     streams_created.push(("suspicious_match".into(), match_ok));
 
+    // ── Stream 6: ASOF Match (ASOF JOIN — front-running detection) ──
+    let asof_ok = try_create(&db, "asof_match",
+        "CREATE STREAM asof_match AS
+         SELECT t.symbol,
+                t.price AS trade_price,
+                t.volume,
+                t.account_id AS trade_account,
+                o.order_id,
+                o.account_id AS order_account,
+                o.price AS order_price,
+                t.price - o.price AS price_spread
+         FROM trades t
+         ASOF JOIN orders o
+         MATCH_CONDITION(t.ts >= o.ts)
+         ON t.symbol = o.symbol"
+    ).await;
+    streams_created.push(("asof_match".into(), asof_ok));
+
     // ── Create sinks + subscribe ──
     macro_rules! setup_sub {
         ($db:expr, $name:expr, $ok:expr, $ty:ty) => {
@@ -145,6 +164,7 @@ pub async fn setup() -> Result<DetectionPipeline, Box<dyn std::error::Error>> {
     let rapid_fire_sub = setup_sub!(db, "rapid_fire", rapid_ok, RapidFireBurst);
     let wash_score_sub = setup_sub!(db, "wash_score", wash_ok, WashScore);
     let suspicious_match_sub = setup_sub!(db, "suspicious_match", match_ok, SuspiciousMatch);
+    let asof_match_sub = setup_sub!(db, "asof_match", asof_ok, AsofMatch);
 
     db.start().await?;
 
@@ -160,6 +180,7 @@ pub async fn setup() -> Result<DetectionPipeline, Box<dyn std::error::Error>> {
         rapid_fire_sub,
         wash_score_sub,
         suspicious_match_sub,
+        asof_match_sub,
         streams_created,
     })
 }

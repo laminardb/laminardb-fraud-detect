@@ -56,7 +56,7 @@ async fn run_headless(fraud_rate: f64, duration_secs: u64) -> Result<(), Box<dyn
     let mut latency = LatencyTracker::new();
     let mut total_trades = 0u64;
     let mut total_orders = 0u64;
-    let mut stream_counts: [u64; 5] = [0; 5];
+    let mut stream_counts: [u64; 6] = [0; 6];
 
     let run_duration = if duration_secs == 0 { Duration::from_secs(3600) } else { Duration::from_secs(duration_secs) };
     let start = Instant::now();
@@ -144,6 +144,19 @@ async fn run_headless(fraud_rate: f64, duration_secs: u64) -> Result<(), Box<dyn
             }
         }
 
+        if let Some(ref sub) = pipeline.asof_match_sub {
+            while let Some(rows) = sub.poll() {
+                latency.record_poll();
+                for row in &rows {
+                    stream_counts[5] += 1;
+                    if let Some(alert) = alert_engine.evaluate_asof(row, gen_instant) {
+                        latency.record_alert(gen_instant);
+                        println!("  ALERT | {:?} | {} | {}us", alert.severity, alert.description, alert.latency_us);
+                    }
+                }
+            }
+        }
+
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
 
@@ -155,7 +168,7 @@ async fn run_headless(fraud_rate: f64, duration_secs: u64) -> Result<(), Box<dyn
     println!("  Alerts generated:   {}", alert_engine.total_alerts());
     println!();
     println!("  Stream outputs:");
-    let names = ["vol_baseline", "ohlc_vol", "rapid_fire", "wash_score", "suspicious_match"];
+    let names = ["vol_baseline", "ohlc_vol", "rapid_fire", "wash_score", "suspicious_match", "asof_match"];
     for (i, name) in names.iter().enumerate() {
         println!("    {:<20} {}", name, stream_counts[i]);
     }

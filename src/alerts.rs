@@ -19,6 +19,7 @@ pub enum AlertType {
     RapidFire,
     WashTrading,
     SuspiciousMatch,
+    FrontRunning,
 }
 
 impl AlertType {
@@ -29,6 +30,7 @@ impl AlertType {
             AlertType::RapidFire => "RapidFire",
             AlertType::WashTrading => "WashTrading",
             AlertType::SuspiciousMatch => "SuspiciousMatch",
+            AlertType::FrontRunning => "FrontRunning",
         }
     }
 }
@@ -52,6 +54,7 @@ pub struct AlertEngine {
     pub rapid_fire_threshold: i64,
     pub wash_imbalance_threshold: f64,
     pub match_price_diff_threshold: f64,
+    pub front_run_spread_threshold: f64,
     counts: HashMap<String, u64>,
 }
 
@@ -66,6 +69,7 @@ impl AlertEngine {
             rapid_fire_threshold: 5,
             wash_imbalance_threshold: 0.3,
             match_price_diff_threshold: 1.0,
+            front_run_spread_threshold: 0.5,
             counts: HashMap::new(),
         }
     }
@@ -221,6 +225,31 @@ impl AlertEngine {
                 alert_type: AlertType::SuspiciousMatch,
                 severity,
                 description: format!("{} {} order={} diff={:.4}", row.account_id, row.symbol, row.order_id, row.price_diff),
+                latency_us: gen_instant.elapsed().as_micros() as u64,
+                timestamp_ms: chrono::Utc::now().timestamp_millis(),
+            };
+            self.push_alert(alert.clone());
+            return Some(alert);
+        }
+        None
+    }
+
+    pub fn evaluate_asof(&mut self, row: &AsofMatch, gen_instant: Instant) -> Option<Alert> {
+        // Front-running: different accounts, trade executed near order price
+        if row.trade_account != row.order_account && row.price_spread.abs() < self.front_run_spread_threshold {
+            let severity = if row.price_spread.abs() < 0.01 {
+                AlertSeverity::Critical
+            } else if row.price_spread.abs() < 0.1 {
+                AlertSeverity::High
+            } else {
+                AlertSeverity::Medium
+            };
+            self.next_id += 1;
+            let alert = Alert {
+                id: self.next_id,
+                alert_type: AlertType::FrontRunning,
+                severity,
+                description: format!("{}->{} {} spread={:.4}", row.trade_account, row.order_account, row.symbol, row.price_spread),
                 latency_us: gen_instant.elapsed().as_micros() as u64,
                 timestamp_ms: chrono::Utc::now().timestamp_millis(),
             };

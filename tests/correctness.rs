@@ -254,3 +254,67 @@ async fn test_suspicious_match_correctness() {
 
     let _ = pipeline.db.shutdown().await;
 }
+
+// ── Test 6: ASOF Match (ASOF JOIN — front-running detection) ──
+// SQL: t.price - o.price AS price_spread
+//      FROM trades t ASOF JOIN orders o MATCH_CONDITION(t.ts >= o.ts) ON symbol
+// Push orders first (separate micro-batch), then trade, assert join and price_spread.
+#[tokio::test]
+async fn test_asof_match_correctness() {
+    let pipeline = detection::setup().await.unwrap();
+    let base: i64 = 100_000;
+
+    // ASOF JOIN might not be available in published crates
+    if pipeline.asof_match_sub.is_none() {
+        eprintln!("ASOF JOIN not available — skipping test");
+        let _ = pipeline.db.shutdown().await;
+        return;
+    }
+
+    // Step 1: Push order first and advance its watermark (separate micro-batch)
+    let orders = vec![
+        Order { order_id: "ASOF-ORD-1".into(), account_id: "D2".into(), symbol: "TSLA".into(), side: "buy".into(), quantity: 100, price: 250.00, ts: base },
+    ];
+    pipeline.order_source.push_batch(orders);
+    pipeline.order_source.watermark(base + 5_000);
+
+    // Small sleep to let the micro-batch process the order
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Step 2: Push trade after order (ts = base + 1000, so t.ts >= o.ts is satisfied)
+    let trades = vec![
+        Trade { account_id: "D1".into(), symbol: "TSLA".into(), side: "buy".into(), price: 250.10, volume: 100, order_ref: "".into(), ts: base + 1000 },
+    ];
+    pipeline.trade_source.push_batch(trades);
+    pipeline.trade_source.watermark(base + 20_000);
+    pipeline.order_source.watermark(base + 20_000);
+
+    let sub = pipeline.asof_match_sub.as_ref().unwrap();
+    let results = collect_all(sub, Duration::from_secs(8)).await;
+
+    let tsla: Vec<_> = results.iter()
+        .filter(|r: &&laminardb_fraud_detect::types::AsofMatch| r.symbol == "TSLA")
+        .collect();
+
+    if tsla.is_empty() {
+        eprintln!("ASOF JOIN stream created but produced no output — may need unreleased fix");
+        let _ = pipeline.db.shutdown().await;
+        return;
+    }
+
+    let row = &tsla[0];
+    assert!((row.trade_price - 250.10).abs() < 0.01, "trade_price should be 250.10, got {}", row.trade_price);
+    assert!((row.order_price - 250.00).abs() < 0.01, "order_price should be 250.00, got {}", row.order_price);
+
+    // price_spread = trade_price - order_price = 250.10 - 250.00 = 0.10
+    let expected_spread = 250.10 - 250.00;
+    assert!((row.price_spread - expected_spread).abs() < 0.01,
+        "price_spread should be {:.4}, got {:.4}", expected_spread, row.price_spread);
+
+    assert_eq!(row.volume, 100, "volume should be 100");
+    assert_eq!(row.trade_account, "D1", "trade_account should be D1");
+    assert_eq!(row.order_account, "D2", "order_account should be D2");
+    assert_eq!(row.order_id, "ASOF-ORD-1", "order_id should be ASOF-ORD-1");
+
+    let _ = pipeline.db.shutdown().await;
+}

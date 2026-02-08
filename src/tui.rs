@@ -23,7 +23,7 @@ struct App {
     alerts: VecDeque<Alert>,
     latency: LatencyTracker,
     alert_engine: AlertEngine,
-    stream_counts: [u64; 5],
+    stream_counts: [u64; 6],
     total_trades: u64,
     total_orders: u64,
     total_alerts: u64,
@@ -39,7 +39,7 @@ impl App {
             alerts: VecDeque::with_capacity(200),
             latency: LatencyTracker::new(),
             alert_engine: AlertEngine::new(),
-            stream_counts: [0; 5],
+            stream_counts: [0; 6],
             total_trades: 0,
             total_orders: 0,
             total_alerts: 0,
@@ -197,6 +197,18 @@ async fn run_app(
                 }
             }
         }
+        if let Some(ref sub) = pipeline.asof_match_sub {
+            while let Some(rows) = sub.poll() {
+                app.latency.record_poll();
+                for row in &rows {
+                    app.stream_counts[5] += 1;
+                    if let Some(alert) = app.alert_engine.evaluate_asof(row, gen_instant) {
+                        app.latency.record_alert(gen_instant);
+                        app.add_alert(alert);
+                    }
+                }
+            }
+        }
     }
 
     let _ = pipeline.db.shutdown().await;
@@ -330,7 +342,7 @@ fn draw_latency_and_streams(f: &mut ratatui::Frame, app: &App, area: Rect) {
     f.render_widget(latency_widget, chunks[0]);
 
     // Stream counters panel
-    let names = ["vol_baseline", "ohlc_vol", "rapid_fire", "wash_score", "suspicious_match"];
+    let names = ["vol_baseline", "ohlc_vol", "rapid_fire", "wash_score", "suspicious_match", "asof_match"];
     let stream_rows: Vec<Row> = names
         .iter()
         .enumerate()
@@ -363,7 +375,7 @@ fn draw_counts_and_prices(f: &mut ratatui::Frame, app: &App, area: Rect) {
 
     // Alert counts by type
     let counts = app.alert_engine.alert_counts();
-    let type_names = ["VolumeAnomaly", "PriceSpike", "RapidFire", "WashTrading", "SuspiciousMatch"];
+    let type_names = ["VolumeAnomaly", "PriceSpike", "RapidFire", "WashTrading", "SuspiciousMatch", "FrontRunning"];
     let count_rows: Vec<Row> = type_names
         .iter()
         .map(|name| {

@@ -78,3 +78,15 @@ pub struct SuspiciousMatch {
     pub order_price: f64,
     pub price_diff: f64,
 }
+
+#[derive(Debug, Clone, FromRow)]
+pub struct AsofMatch {
+    pub symbol: String,
+    pub trade_price: f64,
+    pub volume: i64,
+    pub trade_account: String,
+    pub order_id: String,
+    pub order_account: String,
+    pub order_price: f64,
+    pub price_spread: f64,
+}
